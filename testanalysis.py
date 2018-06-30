@@ -13,8 +13,6 @@ import scipy.fftpack as fft
 import scipy.interpolate as interp
 import matplotlib.pyplot as pyplot
 
-import ReactorAnalysisV6 as ra
-
 def plot_xy(np_array):
     pyplot.plot(np_array[:, 0], np_array[:, 1])
 
