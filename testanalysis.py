@@ -13,6 +13,90 @@ import scipy.fftpack as fft
 import scipy.interpolate as interp
 import matplotlib.pyplot as pyplot
 
+class obj(object):
+    pass
+
+def import_shimadzu_data(filename, delimiter="\t", headerlines=0,
+                         quotechar='"',
+                         smplflag="[Sample Information]", smpl_lead=1,
+                         peakflag="[Peak Table", peak_lead=2,
+                         cmpdflag="[Compound Results", leading=2,
+                         crmgflag="[Chromatogram", crmg_lead=5):
+    ret = obj()
+    ret.peaks = list()
+    ret.cmpds = list()
+    ret.chromatogram = list()
+    ret.time = ""
+    with open(filename) as target:
+        skip = 0
+        mark = -1
+        mark2 = -1
+        mark3 = -1
+        mark4 = -1
+        for line in target:
+            skip += 1
+            if skip <= headerlines:
+                continue
+            if line.startswith(cmpdflag):
+                mark = 0
+            if line.startswith(smplflag):
+                mark2 = 0
+            if line.startswith(peakflag):
+                mark3 = 0
+            if line.startswith(crmgflag):
+                mark4 = 0
+            if mark >= 0:
+                mark += 1
+                if "" == line.strip():
+                    mark = -1
+            if mark2 >= 0:
+                mark2 += 1
+                if "" == line.strip():
+                    mark2 = -1
+            if mark3 >= 0:
+                mark3 += 1
+                if "" == line.strip():
+                    mark3 = -1
+            if mark4 >= 0:
+                mark4 += 1
+                if "" == line.strip():
+                    mark4 = -1
+            if mark2 > smpl_lead + 1:
+                splt = line.split(delimiter)
+                cnt = 0
+                for s in splt:
+                    cnt += 1
+                    st = s.strip()
+                    if (cnt == 2):
+                        ret.time = st
+                mark2 = -1
+            if mark3 > peak_lead + 1:
+                splt = line.split(delimiter)
+                if len(splt) > 4:
+                    ret.peaks.append(
+                            (int(splt[0].strip()),  # peak no
+                            (float(splt[1].strip())),  # ret time
+                            (float(splt[4].strip()))))  # peak area
+            if mark4 > crmg_lead + 1:
+                splt = line.split(delimiter)
+                try:
+                    ret.chromatogram.append((float(splt[0]), int(splt[1])))
+                except ValueError as ve:
+                    print("Error reading chromatogram at line " + str(skip))
+                    raise ve
+            if mark > leading + 1:
+                splt = line.split(delimiter)
+                row = list()
+                cnt = 0
+                for s in splt:
+                    cnt += 1
+                    st = s.strip()
+                    if (cnt >= 2 and cnt <= 4):
+                        row.append(st)
+                ret.cmpds.append(row)
+
+    return ret
+
 def plot_xy(np_array):
     pyplot.plot(np_array[:, 0], np_array[:, 1])
 
@@ -379,7 +463,7 @@ def line_walk(x, y, window=10, minwidth=50, cutoff=500):
             prevfit = popt
     return lines
 
-class SmoothingCurve():
+class Spline():
 
     def __init__(self):
         self.y0 = 0
@@ -430,7 +514,7 @@ class SmoothingCurve():
         return self.generate(np.arange(1000) / 10.0)
 
 def testsmooth(npts=20):
-    curve = SmoothingCurve()
+    curve = Spline()
     curve.accel = np.zeros((2, npts), np.float64)
     spacing = np.linspace(0, dx[-1], npts)
     for i in range(npts):
@@ -448,20 +532,20 @@ def testsmooth(npts=20):
     unpack_curve(dx, *param)
     return curve
 
-def custom_smooth(x, y, y0win=50, d0win=100, ratio=20):
+def custom_smooth(x, y, y0win=50, d0win=100, ratio=20, pan=5):
     n = x.shape[0]
     y0 = np.average(y[:y0win])
     d0 = np.average((y[1:d0win] - y[:d0win - 1]) / (x[1:d0win] - x[:d0win - 1]))
-    curve = SmoothingCurve()
+    curve = Spline()
     curve.y0 = y0; curve.d0 = d0
     curve.accel = np.zeros((2, n), np.float64)
-    x0 = x[0]
+    x0 = x[pan]
     a0 = 0
     val = y0
-    for i in xrange(1, n):
+    for i in xrange(pan + 1, n):
         x1 = x[i]
-        y1 = y[i]
-        d1 = (y1 - y0) / (x1 - x0)
+        y1 = y[i - pan:i]
+        d1 = np.average((y1 - y0) / (x1 - x0))
         a1 = (d1 - d0) / (x1 - x0)
         diff = y0 - val
         factor = np.exp(-diff / ratio)
@@ -469,7 +553,7 @@ def custom_smooth(x, y, y0win=50, d0win=100, ratio=20):
         curve.accel[0, i - 1] = x1
         curve.accel[1, i - 1] = a1
         val += a1 * (x1 - x0) ** 2
-        x0 = x1; y0 = y1; d0 = d1
+        x0 = x1; y0 = y1[-1]; d0 = d1
 
 #     replace = np.zeros((2, n / ratio), np.float64)
 #     for i in xrange(n / ratio):
@@ -521,7 +605,7 @@ def shimazdu_integrate(x, y, width=8, slope=1000, drift=800, tdbl=1000,
         if trypeak:
             pass
 
-testdata = ra.import_shimadzu_data("batch_data043.txt")
+testdata = import_shimadzu_data("../Sandbox/batch_data043.txt")
 data = np.array(testdata.chromatogram)
 dx = data[:, 0]
 dy = data[:, 1]
