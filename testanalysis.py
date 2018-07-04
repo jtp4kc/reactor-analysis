@@ -532,28 +532,35 @@ def testsmooth(npts=20):
     unpack_curve(dx, *param)
     return curve
 
-def custom_smooth(x, y, y0win=50, d0win=100, ratio=20, pan=5):
+def custom_smooth(x, y, y0win=50, d0win=100, ratio=20, pan=5, y0override=None, d0override=None):
     n = x.shape[0]
     y0 = np.average(y[:y0win])
     d0 = np.average((y[1:d0win] - y[:d0win - 1]) / (x[1:d0win] - x[:d0win - 1]))
+    if y0override is not None:
+        y0 = y0override
+    if d0override is not None:
+        d0 = d0override
     curve = Spline()
     curve.y0 = y0; curve.d0 = d0
     curve.accel = np.zeros((2, n), np.float64)
     x0 = x[pan]
     a0 = 0
     val = y0
-    for i in xrange(pan + 1, n):
+    for i in xrange(pan + 1, n - 1):
         x1 = x[i]
-        y1 = y[i - pan:i]
+        y1 = y[i - pan:i + 1]
         d1 = np.average((y1 - y0) / (x1 - x0))
         a1 = (d1 - d0) / (x1 - x0)
         diff = y0 - val
-        factor = np.exp(-diff / ratio)
-        a1 = a1 * factor
+        if ratio == 0:
+            factor = 1.0
+        else:
+            factor = np.exp(-diff / ratio)
+        a1 = a1 * factor  # + (1 - factor) * a0
         curve.accel[0, i - 1] = x1
         curve.accel[1, i - 1] = a1
-        val += a1 * (x1 - x0) ** 2
-        x0 = x1; y0 = y1[-1]; d0 = d1
+        val += (a1 * (x1 - x0) + d1) * (x1 - x0)
+        x0 = x1; y0 = y1[-1]; d0 = d1; a0 = a1
 
 #     replace = np.zeros((2, n / ratio), np.float64)
 #     for i in xrange(n / ratio):
