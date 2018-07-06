@@ -4,6 +4,7 @@ Created on Mar 2, 2018
 @author: adjun_000
 '''
 
+import math
 import numpy as np
 import scipy.signal as signal
 import scipy.ndimage as ndimage
@@ -12,6 +13,8 @@ import scipy.optimize as optim
 import scipy.fftpack as fft
 import scipy.interpolate as interp
 import matplotlib.pyplot as pyplot
+from astropy.units import ps
+from nltk.corpus.reader.rte import norm
 
 class obj(object):
     pass
@@ -99,6 +102,15 @@ def import_shimadzu_data(filename, delimiter="\t", headerlines=0,
 
 def plot_xy(np_array):
     pyplot.plot(np_array[:, 0], np_array[:, 1])
+
+def trapz(X, Y=None):
+    if (Y is None):
+        Y = X
+        X = np.arange(len(Y))
+    total = 0
+    for i in range(1, len(Y)):
+        total += (Y[i] + Y[i - 1]) * (X[i] - X[i - 1]) / 2
+    return total
 
 def value_filter(xdata, ydata, minval=None, maxval=None):
     n = np.size(xdata)
@@ -513,6 +525,18 @@ class Spline():
 
         return self.generate(np.arange(1000) / 10.0)
 
+def moving_average(data, span=5):
+    n = len(data)
+    D = sparse.eye(n)
+    half = int(math.floor(span / 2))
+    for i in range(half + 1 - span, half + 1):
+        if i != 0:
+            D += sparse.eye(n, k=i)
+
+    val = D.sum(0).A[0]  # converts matrix return to a 1-D array
+    summa = D.dot(data)
+    return summa / val
+
 def testsmooth(npts=20):
     curve = Spline()
     curve.accel = np.zeros((2, npts), np.float64)
@@ -571,6 +595,69 @@ def custom_smooth(x, y, y0win=50, d0win=100, ratio=20, pan=5, y0override=None, d
 
     return curve
 
+def custom_smooth2(x, y, window=101, slope=1000, tol=1000, npts=25):
+    n = len(x)
+    ma = moving_average(y, window)
+    da = derivative(x, ma)
+    ind = []
+    lock = 0
+    peak = False
+    count = 0
+    start = None
+    updown = None
+    last = None
+    for i in range(1, n):
+        if da[i] > 0 and last == "DOWN":
+            updown = "UP"
+        elif da[i] < 0 and last == "UP":
+            updown = "DOWN"
+        else:
+            updown = None
+        if da[i] > 0:
+            last = "UP"
+        elif da[i] < 0:
+            last = "DOWN"
+        if not peak and da[i] > slope:
+            # report first x where this occurs
+            peak = True
+            start = i
+            lock = i - 1
+            count = 20
+        if count > 0:
+            count -= 1
+        elif peak and updown == "UP" and np.abs(ma[i] - ma[lock]) < tol:
+            peak = False
+            if start is not None:
+                ind.append((start, i))
+                start = None
+    buildx = []
+    buildy = []
+    last = 0
+    for i in ind:
+        buildx.append(x[last:i[0]])
+        buildy.append(ma[last:i[0]])
+        last = i[1]
+    xs = np.concatenate(buildx)
+    ys = np.concatenate(buildy)
+
+    curve = Spline()
+    curve.accel = np.zeros((2, npts), np.float64)
+    spacing = np.linspace(0, xs[-1], npts)
+    for i in range(npts):
+        curve.accel[0, i] = spacing[i]
+
+    def unpack_curve(mx, *p):
+        curve.y0 = p[0]
+        curve.d0 = p[1]
+        for i in range(npts):
+            curve.accel[1, i] = p[i + 2]
+        return curve.generate(mx)
+
+    p0 = np.array([ma[0], 0] + [0] * npts)
+    param, _ = optim.curve_fit(unpack_curve, xs, ys, p0)
+    vals = unpack_curve(xs, *param)
+    return linear_interpolate(x, xs, vals)
+
 def integrate_signal(x, y):
     smooth = smooth_window_deriv(x, y, 50)
     deriv = derivative(x, smooth)
@@ -587,30 +674,157 @@ def integrate_signal(x, y):
     with second order process responses for an example of peak shape 
     """
 
-def shimazdu_integrate(x, y, width=8, slope=1000, drift=800, tdbl=1000,
+def local_extrema(x, y):
+    da = derivative(x, y)
+    le = np.zeros_like(y)
+    last = da[0]
+    for i in xrange(1, len(x)):
+        if da[i] != 0:
+            if last < 0 and da[i] > 0:
+                le[i] = -1
+            if last > 0 and da[i] < 0:
+                le[i] = 1
+            last = da[i]
+    if da[0] < 0:
+        le[0] = 1
+    if da[0] > 0:
+        le[0] = -1
+    if da[-2] < 0:
+        le[-1] = -1
+    if da[-2] > 0:
+        le[-1] = 1
+    return le
+
+def testbounds(x, y):
+    test = linear_interpolate(x, x[[0, -1]], y[[0, -1]])
+    valmin = np.min(y - test)
+    return valmin < 0
+
+def peakbounds(x, y, le, ps, pe, leftlim):
+    n = len(x)
+    while le[ps] != -1 and ps > leftlim:
+        ps -= 1
+    while le[pe] != -1 and pe < n - 1:
+        pe += 1
+    failed = False
+    while not failed:
+        # test right
+        ne = pe + 1
+        if ne <= n - 1:
+            while le[ne] != -1 and ne < n - 1:
+                ne += 1
+            failright = testbounds(x[ps:ne + 1], y[ps:ne + 1])
+        else:
+            failright = True
+        if failright:
+            ne = pe
+        # test left
+        ns = ps - 1
+        if ns >= leftlim:
+            while le[ns] != -1 and ns > leftlim:
+                ns -= 1
+            failleft = testbounds(x[ns:ne + 1], y[ns:ne + 1])
+        else:
+            failleft = True
+        if failleft:
+            ns = ps
+        ps = ns
+        pe = ne
+        failed = failright and failleft
+    return ps, pe
+
+class Peak:
+
+    def __init__(self):
+        self.leading = 0
+        self.retention = 0
+        self.tailing = 0
+        self.height = 0
+        self.area = 0
+
+def shimadzu_integrate(x, y, width=8, slope=1000, drift=800, tdbl=1000,
                        minarea=10000):
+    da = derivative(x, y)
+    le = local_extrema(x, y)
     NORM = "Normal"; PEAK = "Peak"
-    peaks = []
     base = y[0]
-    peakstart = x[0]
-    integ = 0
     state = NORM
+    peakstart = 0
+    forward = 0
+    count = 0
+    baseline = np.zeros_like(y)
+    # driftonly = baseline * np.NaN
     for i in xrange(1, x.shape[0]):
-        baseold = base
         xold = x[i - 1]
         xval = x[i]
-        yold = y[i - 1]
         yval = y[i]
-        m = (yval - yold) / ((xval - xold) * 60)
-        base += (xval - xold) / 60.0 * drift
-        if yval < base:
+        if i <= forward:
+            base = baseline[i]
+            continue
+        if state == NORM and da[i - 1] >= slope:
+            count += 1
+            if count >= 3:
+                count = 0
+                state = PEAK
+                peakstart = i
+        else:
+            count = 0
+        if state == NORM:
             base = yval
-            peakstart = xval
-            integ = 0
-        if m >= slope:
-            trypeak = True
-        if trypeak:
-            pass
+        if state == PEAK:
+            base += (xval - xold) * drift
+            # driftonly[i] = base
+            if yval < base:
+                state = NORM
+                i1, i2 = peakbounds(x, y, le, peakstart, i, forward)
+                grabx = x[[i1, i2]]
+                graby = y[[i1, i2]]
+                fillx = x[i1:i2 + 1]
+                baseline[i1:i2 + 1] = linear_interpolate(fillx, grabx, graby)
+                base = baseline[i]
+                forward = i2
+        baseline[i] = base
+
+    signal = y - baseline
+    peaks = []
+    rt = 0
+    area = 0
+    height = 0
+    split = []
+    state = NORM
+    newbase = baseline * np.NaN
+    for i in xrange(1, x.shape[0]):
+        xold = x[i - 1]
+        yold = signal[i - 1]
+        xval = x[i]
+        yval = signal[i]
+        if yval > 0:
+            if state != PEAK:
+                state = PEAK
+                peakstart = i - 1
+            area += (yval + yold) * (xval - xold) / 2
+            if yval > height:
+                height = yval
+                rt = xval
+            if le[i] == -1:  # local minima
+                if yval < height * 0.5:  # attempt to split
+                    split.append(i)
+        elif state == PEAK:
+            state = NORM
+            area *= 60  # convert to seconds
+            if area >= minarea:
+                peak = Peak()
+                peak.area = area
+                peak.height = height
+                peak.leading = x[peakstart]
+                peak.tailing = x[i]
+                peak.retention = rt
+                peaks.append(peak)
+                newbase[peakstart:i] = baseline[peakstart:i]
+            area = 0
+            height = 0
+            split = []
+    return peaks, newbase
 
 testdata = import_shimadzu_data("../Sandbox/batch_data043.txt")
 data = np.array(testdata.chromatogram)
