@@ -659,20 +659,24 @@ def custom_smooth2(x, y, window=101, slope=1000, tol=1000, npts=25):
     return linear_interpolate(x, xs, vals)
 
 def integrate_signal(x, y):
-    smooth = smooth_window_deriv(x, y, 50)
-    deriv = derivative(x, smooth)
-    fltx, flty = filler_filter(x, deriv)
+    smooth = custom_smooth2(x, y)
+    signal = y - smooth
 
-    """ Create an algorithm that coasts along the signal, plotting a smooth line to 
-    fit the data, and segments it into portions that can each be optimized to 
-    achieve a better fit. When the signal deviates too much from the line, stiffen
-    the curve so that it moves more slowly (lower derivative). This will help create
-    a baseline underneath the peaks, and help with the giant tailing peaks problem
-    
-    Do peak fitting in order to de-convolute peaks that co-ellute, that is, to draw 
-    a line under a peak that comes out on the tail of an earlier peak. See the work
-    with second order process responses for an example of peak shape 
-    """
+    modsig = signal * 1.0
+    modsig[modsig < 0] = np.NaN
+
+    return modsig
+
+""" Create an algorithm that coasts along the signal, plotting a smooth line to 
+fit the data, and segments it into portions that can each be optimized to 
+achieve a better fit. When the signal deviates too much from the line, stiffen
+the curve so that it moves more slowly (lower derivative). This will help create
+a baseline underneath the peaks, and help with the giant tailing peaks problem
+
+Do peak fitting in order to de-convolute peaks that co-ellute, that is, to draw 
+a line under a peak that comes out on the tail of an earlier peak. See the work
+with second order process responses for an example of peak shape 
+"""
 
 def local_extrema(x, y):
     da = derivative(x, y)
