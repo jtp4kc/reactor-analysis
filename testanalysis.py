@@ -658,14 +658,100 @@ def custom_smooth2(x, y, window=101, slope=1000, tol=1000, npts=25):
     vals = unpack_curve(xs, *param)
     return linear_interpolate(x, xs, vals)
 
-def integrate_signal(x, y):
+class Peake():
+    def __init__(self):
+        self.data = None
+        self.time = None
+        self.orig = None
+        self.base = None
+        self.retention = 0
+        self.leading = 0
+        self.tailing = 0
+        self.area = 0
+        self.height = 0
+        self.negative = False
+
+def integrate_signal(x, y, reltol=0.01):
     smooth = custom_smooth2(x, y)
     signal = y - smooth
 
-    modsig = signal * 1.0
-    modsig[modsig < 0] = np.NaN
+    negsig = signal * -1.0
+    negsig[negsig < 0] = 0
+    n = len(x)
 
-    return modsig
+    peaks = []
+    trapz = (negsig[1:] + negsig[:-1]) * (x[1:] - x[:-1]) / 2
+    startind = -1
+    for i in xrange(1, n - 1):
+        if negsig[i] > 0:
+            if startind < 0:
+                startind = i
+        else:
+            if startind >= 0:
+                area = 60 * trapz[startind:i].sum()
+                if area > 0:
+                    peak = Peake()
+                    peak.negative = True
+                    peak.data = -negsig[startind:i + 1]
+                    peak.time = x[startind:i + 1]
+                    peak.orig = y[startind:i + 1]
+                    peak.base = smooth[startind:i + 1]
+                    peak.area = area
+                    peak.height = -peak.data.min()
+                    peaks.append(peak)
+            startind = -1
+
+    modsig = signal * 1.0
+    modsig[modsig < 0] = 0
+
+    trapz = (modsig[1:] + modsig[:-1]) * (x[1:] - x[:-1]) / 2
+    startind = -1
+    for i in xrange(1, n - 1):
+        if modsig[i] > 0:
+            if startind < 0:
+                startind = i
+        else:
+            if startind >= 0:
+                area = 60 * trapz[startind:i].sum()
+                if area > 0:
+                    peak = Peake()
+                    peak.data = modsig[startind:i + 1]
+                    peak.time = x[startind:i + 1]
+                    peak.orig = y[startind:i + 1]
+                    peak.base = smooth[startind:i + 1]
+                    peak.area = area
+                    peak.height = peak.data.max()
+                    peaks.append(peak)
+            startind = -1
+
+    height = np.array([p.height for p in peaks])
+    areas = np.array([p.area for p in peaks])
+    msd = areas.std()
+    accepted = []
+    last = msd
+    for _ in xrange(len(peaks)):  # maximum of npeaks loops
+        ind = np.nanargmax(areas)
+        big = areas[ind]
+        areas[ind] = np.NaN
+        sd = np.nanstd(areas)
+        if np.abs(sd - last) < reltol * last:
+            areas[ind] = big
+            break
+        else:
+            accepted.append(ind)
+        last = sd
+
+    avg = np.nanmean(areas)
+    print "Noise in peaks:", avg
+
+    keep = []
+    sumheight = height.sum()
+    for ind in accepted:
+        keep.append(peaks[ind])
+        sumheight -= peaks[ind].height
+    avh = sumheight / (len(peaks) - len(accepted))
+    print "Noise in signal:", avh
+    return keep
 
 """ Create an algorithm that coasts along the signal, plotting a smooth line to 
 fit the data, and segments it into portions that can each be optimized to 
