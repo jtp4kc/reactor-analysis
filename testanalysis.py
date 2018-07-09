@@ -4,6 +4,7 @@ Created on Mar 2, 2018
 @author: adjun_000
 '''
 
+import os
 import math
 import numpy as np
 import scipy.signal as signal
@@ -13,8 +14,10 @@ import scipy.optimize as optim
 import scipy.fftpack as fft
 import scipy.interpolate as interp
 import matplotlib.pyplot as pyplot
-from astropy.units import ps
-from nltk.corpus.reader.rte import norm
+from statsmodels.sandbox.stats.multicomp import reject
+
+FILE_SAVE = "_integrate_v01.sav"
+FILE_TEST = "../Sandbox/batch_data043.txt"
 
 class obj(object):
     pass
@@ -537,25 +540,6 @@ def moving_average(data, span=5):
     summa = D.dot(data)
     return summa / val
 
-def testsmooth(npts=20):
-    curve = Spline()
-    curve.accel = np.zeros((2, npts), np.float64)
-    spacing = np.linspace(0, dx[-1], npts)
-    for i in range(npts):
-        curve.accel[0, i] = spacing[i]
-
-    def unpack_curve(x, *p):
-        curve.y0 = p[0]
-        curve.d0 = p[1]
-        for i in range(npts):
-            curve.accel[1, i] = p[i + 2]
-        return curve.generate(x)
-
-    p0 = np.array([-5000, 0] + [0] * npts)
-    param, _ = optim.curve_fit(unpack_curve, dx, dy, p0)
-    unpack_curve(dx, *param)
-    return curve
-
 def custom_smooth(x, y, y0win=50, d0win=100, ratio=20, pan=5, y0override=None, d0override=None):
     n = x.shape[0]
     y0 = np.average(y[:y0win])
@@ -659,6 +643,7 @@ def custom_smooth2(x, y, window=101, slope=1000, tol=1000, npts=25):
     return linear_interpolate(x, xs, vals)
 
 class Peake():
+
     def __init__(self):
         self.data = None
         self.time = None
@@ -671,7 +656,86 @@ class Peake():
         self.height = 0
         self.negative = False
 
-def integrate_signal(x, y, reltol=0.01):
+    def try_split(self):
+        self.fit_peak()
+        return None
+
+    def fit_peak(self):
+        time = self.time - self.time[0]
+        neg = 1
+        if self.negative:
+            neg = -1
+        data = neg * self.data
+#         curve = self.perform_fitting(time, data)
+        curve = moving_average(data, 101)
+        le = local_extrema(time, curve)
+        segs = []
+        width = 8.0 / 60
+        start = 0
+        last = 0
+        for i in xrange(1, len(time)):
+            if le[i] < 0 and time[i] - last > width:
+                segs.append((self.time[start:i], self.data[start:i]))
+                start = i
+                last = time[i]
+        fill = trapz(time, curve) * 60
+        pyplot.plot(self.time, neg * curve, "r")
+        for (t, d) in segs:
+            pyplot.plot(t, d)
+        print "Area:", self.area, "Curve:", fill
+
+    def heaviside(self, x):
+        y = np.ones_like(x)
+        y[x < 0] = 0
+        return y
+
+    def fitting_function(self, t, p):
+        """ Second order response, kind of
+        @see: https://www.springer.com/cda/content/document/cda_downloaddocument/
+              9781441910264-c1.pdf?SGWID=0-0-45-1202938-p173970268
+        @param: t - time values
+        @param: p - fitting parameters
+        """
+        d1 = np.abs(p[0])
+        a = np.abs(p[1])
+        b = np.abs(p[2])
+        c = np.abs(p[3])
+        t1 = t - d1
+        f = a * (np.exp(-b * t1) * np.sinh(c * t1) * self.heaviside(t1))
+        return f
+
+    def fitting_function2(self, t, p):
+        """ 
+        @param: t - time values
+        @param: p - fitting parameters
+        """
+        d1 = p[0]
+        d2 = p[1]
+        d3 = p[2]
+        a = np.abs(p[3])
+        b = np.abs(p[4])
+        c = np.abs(p[5])
+        d = np.abs(p[6])
+        e = np.abs(p[7])
+        t1 = t - d1
+        t2 = t - d2
+        t3 = t - d3
+        f = a * (np.exp(-b * (np.log(t1 / c)) ** 2 - d * t2 ** 2) * np.sin(e * t3))
+        f[t1 < 0] = 0
+        return f
+
+    def perform_fitting(self, dosetime, adjustedsignal):
+
+        def minfun_(x):
+            return self.fitting_function2(dosetime, x) - adjustedsignal
+
+        # results = optim.leastsq(minfun_, np.array([0.1, self.area, 10, 0.01]))
+        results = optim.leastsq(minfun_, np.array([0.1, 0.5, 0, self.area, 10, 1, 1, 0.02]))
+        results = optim.leastsq(minfun_, results[0])
+        print results
+        return self.fitting_function2(dosetime, results[0])
+
+def integrate_signal(x, y, reltol=0.05):
     smooth = custom_smooth2(x, y)
     signal = y - smooth
 
@@ -747,8 +811,13 @@ def integrate_signal(x, y, reltol=0.01):
     keep = []
     sumheight = height.sum()
     for ind in accepted:
-        keep.append(peaks[ind])
-        sumheight -= peaks[ind].height
+        accept = peaks[ind]
+        keep.append(accept)
+        sumheight -= accept.height
+        add = accept.try_split()
+        if add is not None:
+            for a in add:
+                keep.append(a)
     avh = sumheight / (len(peaks) - len(accepted))
     print "Noise in signal:", avh
     return keep
@@ -784,6 +853,323 @@ def local_extrema(x, y):
     if da[-2] > 0:
         le[-1] = 1
     return le
+
+def estimate_baseline(x, y, window=101, slope=1000, tol=1000, npts=25):
+    n = len(x)
+    ma = moving_average(y, window)
+    da = derivative(x, ma)
+    ind = []
+    lock = 0
+    peak = False
+    count = 0
+    start = None
+    updown = None
+    last = None
+    for i in range(1, n):
+        if da[i] > 0 and last == "DOWN":
+            updown = "UP"
+        elif da[i] < 0 and last == "UP":
+            updown = "DOWN"
+        else:
+            updown = None
+        if da[i] > 0:
+            last = "UP"
+        elif da[i] < 0:
+            last = "DOWN"
+        if not peak and da[i] > slope:
+            # report first x where this occurs
+            peak = True
+            start = i
+            lock = i - 1
+            count = 20
+        if count > 0:
+            count -= 1
+        elif peak and updown == "UP" and np.abs(ma[i] - ma[lock]) < tol:
+            peak = False
+            if start is not None:
+                ind.append((start, i))
+                start = None
+    buildx = []
+    buildy = []
+    last = 0
+    for i in ind:
+        buildx.append(x[last:i[0]])
+        buildy.append(ma[last:i[0]])
+        last = i[1]
+    xs = np.concatenate(buildx)
+    ys = np.concatenate(buildy)
+
+    curve = Spline()
+    curve.accel = np.zeros((2, npts), np.float64)
+    spacing = np.linspace(0, xs[-1], npts)
+    for i in range(npts):
+        curve.accel[0, i] = spacing[i]
+
+    def unpack_curve(mx, *p):
+        curve.y0 = p[0]
+        curve.d0 = p[1]
+        for i in range(npts):
+            curve.accel[1, i] = p[i + 2]
+        return curve.generate(mx)
+
+    p0 = np.array([ma[0], 0] + [0] * npts)
+    param, _ = optim.curve_fit(unpack_curve, xs, ys, p0)
+    unpack_curve(xs, *param)
+    return curve, xs
+
+def reject_peaks(x, y, baseline, signal, reltol=0.05):
+    negsig = signal * -1.0
+    negsig[negsig < 0] = 0
+    n = len(x)
+
+    peaks = []
+    trapz = (negsig[1:] + negsig[:-1]) * (x[1:] - x[:-1]) / 2
+    startind = -1
+    for i in xrange(1, n - 1):
+        if negsig[i] > 0:
+            if startind < 0:
+                startind = i
+        else:
+            if startind >= 0:
+                area = 60 * trapz[startind:i].sum()
+                if area > 0:
+                    peak = Peake()
+                    peak.negative = True
+                    peak.data = -negsig[startind:i + 1]
+                    peak.time = x[startind:i + 1]
+                    peak.orig = y[startind:i + 1]
+                    peak.base = baseline[startind:i + 1]
+                    peak.area = area
+                    peak.height = -peak.data.min()
+                    peaks.append(peak)
+            startind = -1
+
+    modsig = signal * 1.0
+    modsig[modsig < 0] = 0
+
+    trapz = (modsig[1:] + modsig[:-1]) * (x[1:] - x[:-1]) / 2
+    startind = -1
+    for i in xrange(1, n - 1):
+        if modsig[i] > 0:
+            if startind < 0:
+                startind = i
+        else:
+            if startind >= 0:
+                area = 60 * trapz[startind:i].sum()
+                if area > 0:
+                    peak = Peake()
+                    peak.data = modsig[startind:i + 1]
+                    peak.time = x[startind:i + 1]
+                    peak.orig = y[startind:i + 1]
+                    peak.base = baseline[startind:i + 1]
+                    peak.area = area
+                    peak.height = peak.data.max()
+                    peaks.append(peak)
+            startind = -1
+
+    height = np.array([p.height for p in peaks])
+    areas = np.array([p.area for p in peaks])
+    msd = areas.std()
+    accepted = []
+    last = msd
+    for _ in xrange(len(peaks)):  # maximum of npeaks loops
+        ind = np.nanargmax(areas)
+        big = areas[ind]
+        areas[ind] = np.NaN
+        sd = np.nanstd(areas)
+        if np.abs(sd - last) < reltol * last:
+            areas[ind] = big
+            break
+        else:
+            accepted.append(ind)
+        last = sd
+
+    avg = np.nanmean(areas)
+
+    keep = []
+    sumheight = height.sum()
+    for ind in accepted:
+        accept = peaks[ind]
+        keep.append(accept)
+        sumheight -= accept.height
+    avh = sumheight / (len(peaks) - len(accepted))
+
+    return keep, avg, avh
+
+def resolve_peaks(peaks, area_noise, sig_noise):
+    keep = []
+    for p in peaks:
+        time = p.time - p.time[0]
+        neg = 1
+        if p.negative:
+            neg = -1
+        data = neg * p.data
+#         curve = self.perform_fitting(time, data)
+        curve = moving_average(data, 101)
+        le = local_extrema(time, curve)
+        segs = []
+        width = 8.0 / 60
+        start = 0
+        last = 0
+        for i in xrange(1, len(time)):
+            if le[i] < 0 and time[i] - last > width:
+                segs.append((p.time[start:i], p.data[start:i]))
+                start = i
+                last = time[i]
+        pyplot.plot(p.time, neg * curve, "r")
+        for (t, d) in segs:
+            pyplot.plot(t, d)
+        add = p.try_split()
+        if add is not None:
+            for a in add:
+                keep.append(a)
+
+def process_datafile(filename=FILE_TEST):
+    importfile = import_shimadzu_data(filename)
+    if len(importfile.chromatogram) > 0:
+        data = np.array(importfile.chromatogram)
+        x = data[:, 0]
+        y = data[:, 1]
+
+        sf = Savefile_v01()
+        if os.path.exists(FILE_SAVE) and os.path.isfile(FILE_SAVE):
+            sf.read(FILE_SAVE)
+
+        if sf.baseline is not None:
+            curve = sf.baseline
+            xs = curve.xs
+        else:
+            curve, xs = estimate_baseline(x, y)
+            curve.xs = xs
+            sf.baseline = curve
+            sf.save()
+
+        vals = curve.generate(xs)
+        baseline = linear_interpolate(x, xs, vals)
+        signal = y - baseline
+
+        pyplot.plot(x, y, x, baseline)
+
+        if sf.integrate is not None:
+            peaks = sf.integrate
+            (area, sig) = sf.stats
+        else:
+            peaks, area, sig = reject_peaks(x, y, baseline, signal)
+            sf.integrate = peaks
+            sf.stats = (area, sig)
+            sf.save()
+
+        if sf.peaks is not None:
+            peaks = sf.peaks
+        else:
+            peaks = resolve_peaks(peaks, area, sig)
+            sf.peaks = peaks
+            sf.save()
+
+class Savefile_v01():
+    CHECK_1 = "CHECK-BASELINE COMPLETE"
+    CHECK_2 = "CHECK-INTEGRATE COMPLETE"
+    CHECK_3 = "CHECK-PEAK LIST COMPLETE"
+
+    def __init__(self):
+        self.baseline = None
+        self.integrate = None
+        self.stats = None
+        self.peaks = None
+
+    def read(self, filename):
+        if not filename.endswith(".sav"):
+            raise ValueError("Incorrect file format (Requires .sav): " + filename)
+        if not filename.endswith("_v01.sav"):
+            raise ValueError("Incorrect version (Requires v01): " + filename)
+
+        with open(filename, "r") as infile:
+            integrate = False
+            peaks = False
+            temp = None
+            count = 0
+            xs = []
+            ac = []
+            for line in infile:
+                splt = line.split("#")  # comment character
+                line = splt[0].strip()
+                if line == "":
+                    continue
+                if not integrate:
+                    if line == Savefile_v01.CHECK_1:
+                        self.baseline = temp
+                        self.baseline.accel = np.array((xs, ac))
+                        integrate = True
+                        count = 0
+                        xs = []
+                        ac = []
+                    else:
+                        val, num = line.split(":")
+                        if count == 0:
+                            temp = Spline()
+                            temp.y0 = float(num)
+                        elif count == 1:
+                            temp.d0 = float(num)
+                        elif count > 1:
+                            if val.startswith("x"):
+                                xs.append(float(num))
+                            elif val.startswith("a"):
+                                ac.append(float(num))
+                            else:
+                                nums = num.split(",")
+                                temp.xs = np.array([float(n) for n in nums])
+                        count += 1
+                elif not peaks:
+                    if line == Savefile_v01.CHECK_2:
+                        self.integrate = temp
+                        peaks = True
+                        count = 0
+                else:
+                    if line == Savefile_v01.CHECK_3:
+                        self.peaks = temp
+                        count = 0
+            infile.close()
+
+    def save(self):
+        if os.path.exists(FILE_SAVE):
+            os.remove(FILE_SAVE)
+
+        with open(FILE_SAVE, "w") as outfile:
+            if self.baseline is not None:
+                outfile.write("y0:" + str(self.baseline.y0) + "\n")
+                outfile.write("d0:" + str(self.baseline.d0) + "\n")
+                accel = self.baseline.accel
+                for i in xrange(accel.shape[1]):
+                    outfile.write("x" + str(i) + ":" + str(accel[0, i]) + "\n")
+                    outfile.write("a" + str(i) + ":" + str(accel[1, i]) + "\n")
+                outfile.write("times:")
+                for i in xrange(len(self.baseline.xs)):
+                    if i > 0:
+                        outfile.write(",")
+                    outfile.write(str(self.baseline.xs[i]))
+                outfile.write("\n")
+                outfile.write(Savefile_v01.CHECK_1 + "\n")
+            if self.integrate is not None:
+                outfile.write(str(self.stats[0]) + "," + str(self.stats[1]))
+                for peak in self.integrate:
+                    outfile.write("x:")
+                    for i in xrange(len(peak.time)):
+                        if i > 0:
+                            outfile.write(",")
+                        outfile.write(str(peak.time[i]))
+                    outfile.write("y:")
+                    for i in xrange(len(peak.orig)):
+                        if i > 0:
+                            outfile.write(",")
+                        outfile.write(str(peak.orig[i]))
+                    outfile.write("b:")
+                    for i in xrange(len(peak.base)):
+                        if i > 0:
+                            outfile.write(",")
+                        outfile.write(str(peak.base[i]))
+            if self.peaks is not None:
+                pass
+            outfile.close()
 
 def testbounds(x, y):
     test = linear_interpolate(x, x[[0, -1]], y[[0, -1]])
@@ -915,14 +1301,6 @@ def shimadzu_integrate(x, y, width=8, slope=1000, drift=800, tdbl=1000,
             height = 0
             split = []
     return peaks, newbase
-
-testdata = import_shimadzu_data("../Sandbox/batch_data043.txt")
-data = np.array(testdata.chromatogram)
-dx = data[:, 0]
-dy = data[:, 1]
-fltr = filler_filter(dx, dy)
-fx = fltr[0]
-fy = fltr[1]
 
 if __name__ == '__main__':
     pass
