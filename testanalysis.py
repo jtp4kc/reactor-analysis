@@ -14,7 +14,6 @@ import scipy.optimize as optim
 import scipy.fftpack as fft
 import scipy.interpolate as interp
 import matplotlib.pyplot as pyplot
-from statsmodels.sandbox.stats.multicomp import reject
 
 FILE_SAVE = "_integrate_v01.sav"
 FILE_TEST = "../Sandbox/batch_data043.txt"
@@ -110,10 +109,8 @@ def trapz(X, Y=None):
     if (Y is None):
         Y = X
         X = np.arange(len(Y))
-    total = 0
-    for i in range(1, len(Y)):
-        total += (Y[i] + Y[i - 1]) * (X[i] - X[i - 1]) / 2
-    return total
+    vals = (Y[1:] + Y[:-1]) * (X[1:] - X[:-1]) / 2
+    return vals.sum()
 
 def value_filter(xdata, ydata, minval=None, maxval=None):
     n = np.size(xdata)
@@ -645,16 +642,30 @@ def custom_smooth2(x, y, window=101, slope=1000, tol=1000, npts=25):
 class Peake():
 
     def __init__(self):
-        self.data = None
         self.time = None
         self.orig = None
         self.base = None
+        self.data = None
         self.retention = 0
         self.leading = 0
         self.tailing = 0
         self.area = 0
         self.height = 0
         self.negative = False
+
+    def calculate(self):
+        self.data = self.orig - self.base
+        self.leading = self.time[0]
+        self.tailing = self.time[-1]
+        self.negative = np.sign(self.data).sum() < 0
+        neg = 1
+        self.height = np.max(self.data)
+        self.retention = self.time[np.argmax(self.data)]
+        if self.negative:
+            neg = -1
+            self.height = -np.min(self.data)
+            self.retention = self.time[np.argmin(self.data)]
+        self.area = 60 * trapz(self.time, self.data) * neg
 
     def try_split(self):
         self.fit_peak()
@@ -744,7 +755,7 @@ def integrate_signal(x, y, reltol=0.05):
     n = len(x)
 
     peaks = []
-    trapz = (negsig[1:] + negsig[:-1]) * (x[1:] - x[:-1]) / 2
+    traps = (negsig[1:] + negsig[:-1]) * (x[1:] - x[:-1]) / 2
     startind = -1
     for i in xrange(1, n - 1):
         if negsig[i] > 0:
@@ -752,7 +763,7 @@ def integrate_signal(x, y, reltol=0.05):
                 startind = i
         else:
             if startind >= 0:
-                area = 60 * trapz[startind:i].sum()
+                area = 60 * traps[startind:i].sum()
                 if area > 0:
                     peak = Peake()
                     peak.negative = True
@@ -768,7 +779,7 @@ def integrate_signal(x, y, reltol=0.05):
     modsig = signal * 1.0
     modsig[modsig < 0] = 0
 
-    trapz = (modsig[1:] + modsig[:-1]) * (x[1:] - x[:-1]) / 2
+    traps = (modsig[1:] + modsig[:-1]) * (x[1:] - x[:-1]) / 2
     startind = -1
     for i in xrange(1, n - 1):
         if modsig[i] > 0:
@@ -776,7 +787,7 @@ def integrate_signal(x, y, reltol=0.05):
                 startind = i
         else:
             if startind >= 0:
-                area = 60 * trapz[startind:i].sum()
+                area = 60 * traps[startind:i].sum()
                 if area > 0:
                     peak = Peake()
                     peak.data = modsig[startind:i + 1]
@@ -917,13 +928,12 @@ def estimate_baseline(x, y, window=101, slope=1000, tol=1000, npts=25):
     unpack_curve(xs, *param)
     return curve, xs
 
-def reject_peaks(x, y, baseline, signal, reltol=0.05):
+def reject_peaks(x, y, baseline, signal, reltol=0.04):
     negsig = signal * -1.0
     negsig[negsig < 0] = 0
     n = len(x)
 
     peaks = []
-    trapz = (negsig[1:] + negsig[:-1]) * (x[1:] - x[:-1]) / 2
     startind = -1
     for i in xrange(1, n - 1):
         if negsig[i] > 0:
@@ -931,23 +941,18 @@ def reject_peaks(x, y, baseline, signal, reltol=0.05):
                 startind = i
         else:
             if startind >= 0:
-                area = 60 * trapz[startind:i].sum()
-                if area > 0:
-                    peak = Peake()
-                    peak.negative = True
-                    peak.data = -negsig[startind:i + 1]
-                    peak.time = x[startind:i + 1]
-                    peak.orig = y[startind:i + 1]
-                    peak.base = baseline[startind:i + 1]
-                    peak.area = area
-                    peak.height = -peak.data.min()
-                    peaks.append(peak)
+                peak = Peake()
+                peak.data = -negsig[startind:i + 1]
+                peak.time = x[startind:i + 1]
+                peak.orig = y[startind:i + 1]
+                peak.base = baseline[startind:i + 1]
+                peak.calculate()
+                peaks.append(peak)
             startind = -1
 
     modsig = signal * 1.0
     modsig[modsig < 0] = 0
 
-    trapz = (modsig[1:] + modsig[:-1]) * (x[1:] - x[:-1]) / 2
     startind = -1
     for i in xrange(1, n - 1):
         if modsig[i] > 0:
@@ -955,16 +960,13 @@ def reject_peaks(x, y, baseline, signal, reltol=0.05):
                 startind = i
         else:
             if startind >= 0:
-                area = 60 * trapz[startind:i].sum()
-                if area > 0:
-                    peak = Peake()
-                    peak.data = modsig[startind:i + 1]
-                    peak.time = x[startind:i + 1]
-                    peak.orig = y[startind:i + 1]
-                    peak.base = baseline[startind:i + 1]
-                    peak.area = area
-                    peak.height = peak.data.max()
-                    peaks.append(peak)
+                peak = Peake()
+                peak.data = modsig[startind:i + 1]
+                peak.time = x[startind:i + 1]
+                peak.orig = y[startind:i + 1]
+                peak.base = baseline[startind:i + 1]
+                peak.calculate()
+                peaks.append(peak)
             startind = -1
 
     height = np.array([p.height for p in peaks])
@@ -996,33 +998,116 @@ def reject_peaks(x, y, baseline, signal, reltol=0.05):
 
     return keep, avg, avh
 
+class MiniPeak():
+
+    def __init__(self):
+        self.start = -1
+        self.end = -1
+        self.time = None
+        self.data = None
+        self.span = 0
+        self.area = 0
+        self.height = 0
+        self.cut = False
+        self.last = None
+        self.next = None
+
+    def calc(self):
+        t = self.time[self.start:self.end]
+        d = self.data[self.start:self.end]
+        line = linear_interpolate(t, np.array([t[0], t[-1]]),
+                                     np.array([d[0], d[-1]]))
+        test = d - line
+        self.area = 60 * trapz(t, test)
+        self.height = np.max(test)
+        self.span = t[-1] - t[0]
+        self.cut = np.any(test < 0)  # if the signal drops below the baseline, this
+        # will almost certainly not look like a peak
+
+    def merge(self):
+        do_left = None
+        if self.last is not None:  # left exists
+            if self.next is not None:  # right exists
+                if self.last.span < self.next.span:
+                    do_left = True  # left is smaller
+                else:
+                    do_left = False  # right is smaller
+            else:
+                do_left = True  # only left exists
+        elif self.next is not None:
+            do_left = False  # only right exists
+        if do_left is not None:
+            if do_left:
+                self.last.next = self.next
+                self.last.end = self.end
+                self.last.calc()
+            else:
+                self.next.last = self.last
+                self.next.start = self.start
+                self.next.calc()
+
 def resolve_peaks(peaks, area_noise, sig_noise):
     keep = []
+    count = 0
     for p in peaks:
+        count += 1
         time = p.time - p.time[0]
         neg = 1
         if p.negative:
             neg = -1
         data = neg * p.data
-#         curve = self.perform_fitting(time, data)
         curve = moving_average(data, 101)
         le = local_extrema(time, curve)
         segs = []
         width = 8.0 / 60
         start = 0
         last = 0
+        mp_last = None
+        done = len(time) - 1
         for i in xrange(1, len(time)):
             if le[i] < 0 and time[i] - last > width:
-                segs.append((p.time[start:i], p.data[start:i]))
+                mp = MiniPeak()
+                mp.start = start
+                mp.end = i
+                mp.time = p.time
+                mp.data = p.data
+                mp.calc()
+                if mp_last is not None:
+                    mp.last = mp_last
+                    mp_last.next = mp
+                mp_last = mp
+                segs.append(mp)
                 start = i
                 last = time[i]
-        pyplot.plot(p.time, neg * curve, "r")
-        for (t, d) in segs:
-            pyplot.plot(t, d)
-        add = p.try_split()
-        if add is not None:
-            for a in add:
-                keep.append(a)
+        if len(segs) < 2:
+            keep.append(p)
+            # pyplot.plot(p.time, p.data)
+        else:
+            accept = []
+            for _ in xrange(len(segs)):  # maximum iterations- number of segments
+                if len(segs) == 1:
+                    mp = segs[0]
+                    accept.append(mp)
+                ind = 0
+                span = np.Inf
+                for i in xrange(len(segs)):
+                    mp = segs[i]
+                    if mp.span < span:
+                        span = mp.span
+                        ind = i
+
+                mp = segs[ind]
+                if (mp.area >= 0.95 * area_noise and
+                    mp.height >= 0.95 * sig_noise):
+                    accept.append(mp)
+                    if mp.last is not None:
+                        mp.last.next = mp.next
+                    if mp.next is not None:
+                        mp.next.last = mp.last
+                else:
+                    mp.merge()
+                segs.remove(mp)
+    return keep
 
 def process_datafile(filename=FILE_TEST):
     importfile = import_shimadzu_data(filename)
@@ -1048,7 +1133,7 @@ def process_datafile(filename=FILE_TEST):
         baseline = linear_interpolate(x, xs, vals)
         signal = y - baseline
 
-        pyplot.plot(x, y, x, baseline)
+        # pyplot.plot(x, y, x, baseline)
 
         if sf.integrate is not None:
             peaks = sf.integrate
@@ -1059,11 +1144,14 @@ def process_datafile(filename=FILE_TEST):
             sf.stats = (area, sig)
             sf.save()
 
+        for p in peaks:
+            pyplot.plot(p.time, p.orig, p.time, p.base)
+
         if sf.peaks is not None:
             peaks = sf.peaks
         else:
             peaks = resolve_peaks(peaks, area, sig)
-            sf.peaks = peaks
+            # sf.peaks = peaks
             sf.save()
 
 class Savefile_v01():
@@ -1090,6 +1178,7 @@ class Savefile_v01():
             count = 0
             xs = []
             ac = []
+            peak = None
             for line in infile:
                 splt = line.split("#")  # comment character
                 line = splt[0].strip()
@@ -1124,10 +1213,50 @@ class Savefile_v01():
                         self.integrate = temp
                         peaks = True
                         count = 0
+                    else:
+                        if count == 0:
+                            avg, avh = line.split(",")
+                            self.stats = (float(avg), float(avh))
+                            temp = []
+                        else:
+                            val, num = line.split(":")
+                            nums = []
+                            for s in num.split(","):
+                                nums.append(float(s))
+                            if val == "x":
+                                peak = Peake()
+                                peak.time = np.array(nums)
+                            elif val == "y":
+                                peak.orig = np.array(nums)
+                            elif val == "b":
+                                peak.base = np.array(nums)
+                                peak.calculate()
+                                temp.append(peak)
+                                peak = None
+                        count += 1
                 else:
                     if line == Savefile_v01.CHECK_3:
                         self.peaks = temp
                         count = 0
+                    else:
+                        if count == 0:
+                            temp = []
+                        val, num = line.split(":")
+                        nums = []
+                        for s in num.split(","):
+                            nums.append(float(s))
+                        if val == "P":
+                            peak = Peake()
+                        elif val == "x":
+                            peak.time = np.array(nums)
+                        elif val == "y":
+                            peak.orig = np.array(nums)
+                        elif val == "b":
+                            peak.base = np.array(nums)
+                            peak.calculate()
+                            temp.append(peak)
+                            peak = None
+                        count += 1
             infile.close()
 
     def save(self):
@@ -1150,25 +1279,52 @@ class Savefile_v01():
                 outfile.write("\n")
                 outfile.write(Savefile_v01.CHECK_1 + "\n")
             if self.integrate is not None:
-                outfile.write(str(self.stats[0]) + "," + str(self.stats[1]))
+                outfile.write(str(self.stats[0]) + "," + str(self.stats[1]) + "\n")
                 for peak in self.integrate:
                     outfile.write("x:")
                     for i in xrange(len(peak.time)):
                         if i > 0:
                             outfile.write(",")
                         outfile.write(str(peak.time[i]))
-                    outfile.write("y:")
+                    outfile.write("\ny:")
                     for i in xrange(len(peak.orig)):
                         if i > 0:
                             outfile.write(",")
                         outfile.write(str(peak.orig[i]))
-                    outfile.write("b:")
+                    outfile.write("\nb:")
                     for i in xrange(len(peak.base)):
                         if i > 0:
                             outfile.write(",")
                         outfile.write(str(peak.base[i]))
+                    outfile.write("\n")
+                outfile.write(Savefile_v01.CHECK_2 + "\n")
             if self.peaks is not None:
-                pass
+                count = 0
+                for p in self.peaks:
+                    outfile.write("P" + str(count) + ":" +
+                                  str(p.retention) + "," +
+                                  str(p.leading) + "," +
+                                  str(p.tailing) + "," +
+                                  str(p.area) + "," +
+                                  str(p.height) + "\n")
+                    outfile.write("x:")
+                    for i in xrange(len(peak.time)):
+                        if i > 0:
+                            outfile.write(",")
+                        outfile.write(str(peak.time[i]))
+                    outfile.write("\ny:")
+                    for i in xrange(len(peak.orig)):
+                        if i > 0:
+                            outfile.write(",")
+                        outfile.write(str(peak.orig[i]))
+                    outfile.write("\nb:")
+                    for i in xrange(len(peak.base)):
+                        if i > 0:
+                            outfile.write(",")
+                        outfile.write(str(peak.base[i]))
+                    outfile.write("\n")
+                    count += 1
+                outfile.write(Savefile_v01.CHECK_3 + "\n")
             outfile.close()
 
 def testbounds(x, y):
