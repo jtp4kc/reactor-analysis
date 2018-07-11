@@ -14,6 +14,7 @@ import scipy.optimize as optim
 import scipy.fftpack as fft
 import scipy.interpolate as interp
 import matplotlib.pyplot as pyplot
+from astropy.modeling.functional_models import Shift
 
 FILE_SAVE = "_integrate_v01.sav"
 FILE_TEST = "../Sandbox/batch_data043.txt"
@@ -722,17 +723,12 @@ class Peake():
         """
         d1 = p[0]
         d2 = p[1]
-        d3 = p[2]
-        a = np.abs(p[3])
-        b = np.abs(p[4])
-        c = np.abs(p[5])
-        d = np.abs(p[6])
-        e = np.abs(p[7])
+        a = np.abs(p[2])
+        b = np.abs(p[3])
+        c = np.abs(p[4])
         t1 = t - d1
         t2 = t - d2
-        t3 = t - d3
-        f = a * (np.exp(-b * (np.log(t1 / c)) ** 2 - d * t2 ** 2) * np.sin(e * t3))
-        f[t1 < 0] = 0
+        f = a * (np.exp(-b * t1 - c * t2 ** 2))
         return f
 
     def perform_fitting(self, dosetime, adjustedsignal):
@@ -741,7 +737,8 @@ class Peake():
             return self.fitting_function2(dosetime, x) - adjustedsignal
 
         # results = optim.leastsq(minfun_, np.array([0.1, self.area, 10, 0.01]))
-        results = optim.leastsq(minfun_, np.array([0.1, 0.5, 0, self.area, 10, 1, 1, 0.02]))
+        # results = optim.leastsq(minfun_, np.array([0.1, 0.5, 0, self.area, 10, 1, 1, 0.02]))
+        results = optim.leastsq(minfun_, np.array([0, 0.5, self.area, 1, 0.01]))
         results = optim.leastsq(minfun_, results[0])
         print results
         return self.fitting_function2(dosetime, results[0])
@@ -1154,6 +1151,8 @@ def process_datafile(filename=FILE_TEST):
             # sf.peaks = peaks
             sf.save()
 
+        return peaks
+
 class Savefile_v01():
     CHECK_1 = "CHECK-BASELINE COMPLETE"
     CHECK_2 = "CHECK-INTEGRATE COMPLETE"
@@ -1457,6 +1456,17 @@ def shimadzu_integrate(x, y, width=8, slope=1000, drift=800, tdbl=1000,
             height = 0
             split = []
     return peaks, newbase
+
+def fit(x, *p):
+    scale = np.abs(p[0])
+    shift1 = p[1]
+    m1 = np.abs(p[2])
+    shift2 = np.abs(p[3])
+    m2 = np.abs(p[4])
+    t1 = x - shift1
+    t2 = x + shift2
+    vals = scale * np.exp(-m1 * t1 ** 2) * np.exp(-m2 * t2)
+    return vals
 
 if __name__ == '__main__':
     pass
