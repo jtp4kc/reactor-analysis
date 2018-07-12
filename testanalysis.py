@@ -14,7 +14,6 @@ import scipy.optimize as optim
 import scipy.fftpack as fft
 import scipy.interpolate as interp
 import matplotlib.pyplot as pyplot
-from astropy.modeling.functional_models import Shift
 
 FILE_SAVE = "_integrate_v01.sav"
 FILE_TEST = "../Sandbox/batch_data043.txt"
@@ -652,15 +651,21 @@ class Peake():
         self.tailing = 0
         self.area = 0
         self.height = 0
+        self.width = 0
         self.negative = False
 
-    def calculate(self):
+    def calculate(self, leading=None, tailing=None):
         self.data = self.orig - self.base
         self.leading = self.time[0]
+        if leading is not None:
+            self.leading = leading
         self.tailing = self.time[-1]
+        if tailing is not None:
+            self.tailing = tailing
         self.negative = np.sign(self.data).sum() < 0
         neg = 1
         self.height = np.max(self.data)
+        self.width = self.tailing - self.leading
         self.retention = self.time[np.argmax(self.data)]
         if self.negative:
             neg = -1
@@ -716,32 +721,73 @@ class Peake():
         f = a * (np.exp(-b * t1) * np.sinh(c * t1) * self.heaviside(t1))
         return f
 
-    def fitting_function2(self, t, p):
+    def fitting_function2(self, t, p, split=0):
+        """ 
+        @param: t - time values
+        @param: p - fitting parameters
+        """
+        a = np.abs(p[0])
+        b = np.abs(p[1])
+        c = np.abs(p[2])
+        t1 = t - split
+        f1 = a * (np.exp(-b * t1 ** 2))
+        f2 = a * (np.exp(-c * t1 ** 2))
+        f1[t1 > 0] = 0
+        f2[t1 <= 0] = 0
+        return f1 + f2
+
+    def fitting_function3(self, t, p, split=0):
         """ 
         @param: t - time values
         @param: p - fitting parameters
         """
         d1 = p[0]
-        d2 = p[1]
+        d2 = np.abs(p[1])
         a = np.abs(p[2])
         b = np.abs(p[3])
         c = np.abs(p[4])
         t1 = t - d1
-        t2 = t - d2
-        f = a * (np.exp(-b * t1 - c * t2 ** 2))
+        t2 = t
+        f = a * (np.exp(-b * t1 ** 2 - d2 * np.log(c * t2) ** 2))
+        f[t2 <= 0] = 0
         return f
 
-    def perform_fitting(self, dosetime, adjustedsignal):
+    def perform_fitting(self):
+        t = self.time - self.time[0]
+        y = self.data[:]
 
-        def minfun_(x):
-            return self.fitting_function2(dosetime, x) - adjustedsignal
+        tmax = t[np.argmax(y)]
+
+        def minfun_(p):
+            return self.fitting_function2(t, p, split=tmax) - y
 
         # results = optim.leastsq(minfun_, np.array([0.1, self.area, 10, 0.01]))
         # results = optim.leastsq(minfun_, np.array([0.1, 0.5, 0, self.area, 10, 1, 1, 0.02]))
-        results = optim.leastsq(minfun_, np.array([0, 0.5, self.area, 1, 0.01]))
+        results = optim.leastsq(minfun_, np.array([self.area, 1, 1]))  # f2
+        # results = optim.leastsq(minfun_, np.array([1, 0, self.area, 1, 1])) # f3
         results = optim.leastsq(minfun_, results[0])
-        print results
-        return self.fitting_function2(dosetime, results[0])
+        # print results
+        f = self.fitting_function2(t, results[0], split=tmax)
+
+        pyplot.plot(self.time, f + self.base)
+
+        y = y - f
+        tmax = t[np.argmax(y)]
+        results = optim.leastsq(minfun_, np.array([y.max(), 1, 1]))
+        results = optim.leastsq(minfun_, results[0])
+        g = self.fitting_function2(t, results[0], split=tmax)
+
+        pyplot.plot(self.time, g + self.base)
+
+        y = y - g
+        tmax = t[np.argmax(y)]
+        results = optim.leastsq(minfun_, np.array([y.max(), 1, 1]))
+        results = optim.leastsq(minfun_, results[0])
+        h = self.fitting_function2(t, results[0], split=tmax)
+
+        pyplot.plot(self.time, h + self.base)
+
+        return f + g + h
 
 def integrate_signal(x, y, reltol=0.05):
     smooth = custom_smooth2(x, y)
@@ -967,6 +1013,7 @@ def reject_peaks(x, y, baseline, signal, reltol=0.04):
             startind = -1
 
     height = np.array([p.height for p in peaks])
+    width = np.array([p.width for p in peaks])
     areas = np.array([p.area for p in peaks])
     msd = areas.std()
     accepted = []
@@ -987,123 +1034,137 @@ def reject_peaks(x, y, baseline, signal, reltol=0.04):
 
     keep = []
     sumheight = height.sum()
+    sumwidth = width.sum()
     for ind in accepted:
         accept = peaks[ind]
         keep.append(accept)
         sumheight -= accept.height
+        sumwidth -= accept.width
     avh = sumheight / (len(peaks) - len(accepted))
+    avw = sumwidth / (len(peaks) - len(accepted))
 
-    return keep, avg, avh
+    return keep, avg, avh, avw
 
-class MiniPeak():
+def resolve_fit(t, p, split=0):
+    """ Asymmetric Gaussian fitting
+    @param: t - time values
+    @param: p - fitting parameters
+    """
+    a = np.abs(p[0])
+    b = np.abs(p[1])
+    c = np.abs(p[2])
+    t1 = t - split
+    f1 = a * (np.exp(-b * t1 ** 2))
+    f2 = a * (np.exp(-c * t1 ** 2))
+    f1[t1 > 0] = 0
+    f2[t1 <= 0] = 0
+    return f1 + f2
 
-    def __init__(self):
-        self.start = -1
-        self.end = -1
-        self.time = None
-        self.data = None
-        self.span = 0
-        self.area = 0
-        self.height = 0
-        self.cut = False
-        self.last = None
-        self.next = None
+def resolve_tail(t, p):
+    """ Exponential decay
+    @param: t - time values
+    @param: p - fitting parameters
+    """
+    a = np.abs(p[0])
+    b = np.abs(p[1])
+    c = p[2]
+    t1 = t - c
+    return a * np.exp(-b * t1) * t1
 
-    def calc(self):
-        t = self.time[self.start:self.end]
-        d = self.data[self.start:self.end]
-        line = linear_interpolate(t, np.array([t[0], t[-1]]),
-                                     np.array([d[0], d[-1]]))
-        test = d - line
-        self.area = 60 * trapz(t, test)
-        self.height = np.max(test)
-        self.span = t[-1] - t[0]
-        self.cut = np.any(test < 0)  # if the signal drops below the baseline, this
-        # will almost certainly not look like a peak
+def resolve_fitting(t, y, tmax, ymax, exp=False):
+    def minfit(p):
+        return resolve_fit(t, p, split=tmax) - y
+    def mintail(p):
+        return resolve_tail(t, p) - y
+    p0 = [ymax, 1, 1]
+    fitfun = minfit
+    if exp:
+        p0 = [ymax, 1, t[0]]
+        fitfun = mintail
 
-    def merge(self):
-        do_left = None
-        if self.last is not None:  # left exists
-            if self.next is not None:  # right exists
-                if self.last.span < self.next.span:
-                    do_left = True  # left is smaller
-                else:
-                    do_left = False  # right is smaller
-            else:
-                do_left = True  # only left exists
-        elif self.next is not None:
-            do_left = False  # only right exists
-        if do_left is not None:
-            if do_left:
-                self.last.next = self.next
-                self.last.end = self.end
-                self.last.calc()
-            else:
-                self.next.last = self.last
-                self.next.start = self.start
-                self.next.calc()
+    results = optim.leastsq(fitfun, np.array(p0))
+    results = optim.leastsq(fitfun, results[0])
+    return results[0]
 
-def resolve_peaks(peaks, area_noise, sig_noise):
+def resolve_peaks(peaks, area_noise, sig_noise, wid_noise):
     keep = []
-    count = 0
     for p in peaks:
-        count += 1
         time = p.time - p.time[0]
+        orig = np.array(p.orig)
+        base = np.array(p.base)
         neg = 1
         if p.negative:
             neg = -1
-        data = neg * p.data
-        curve = moving_average(data, 101)
-        le = local_extrema(time, curve)
-        segs = []
-        width = 8.0 / 60
-        start = 0
-        last = 0
-        mp_last = None
-        done = len(time) - 1
-        for i in xrange(1, len(time)):
-            if le[i] < 0 and time[i] - last > width:
-                mp = MiniPeak()
-                mp.start = start
-                mp.end = i
-                mp.time = p.time
-                mp.data = p.data
-                mp.calc()
-                if mp_last is not None:
-                    mp.last = mp_last
-                    mp_last.next = mp
-                mp_last = mp
-                segs.append(mp)
-                start = i
-                last = time[i]
-        if len(segs) < 2:
-            keep.append(p)
-            # pyplot.plot(p.time, p.data)
-        else:
-            accept = []
-            for _ in xrange(len(segs)):  # maximum iterations- number of segments
-                if len(segs) == 1:
-                    mp = segs[0]
-                    accept.append(mp)
-                ind = 0
-                span = np.Inf
-                for i in xrange(len(segs)):
-                    mp = segs[i]
-                    if mp.span < span:
-                        span = mp.span
-                        ind = i
 
-                mp = segs[ind]
-                if (mp.area >= 0.95 * area_noise and
-                    mp.height >= 0.95 * sig_noise):
-                    accept.append(mp)
-                    if mp.last is not None:
-                        mp.last.next = mp.next
-                    if mp.next is not None:
-                        mp.next.last = mp.last
-                else:
-                    mp.merge()
-                segs.remove(mp)
+        n = len(time)
+        start = 0
+        while start < n:
+            data = (orig - base) * neg
+            le = local_extrema(time, data)
+            up = start
+            dn = start
+            peakstart = False
+            peakend = False
+            for i in xrange(start + 1, n):
+                if le[i] > 0:
+                    up = i
+                if le[i] < 0:
+                    dn = i
+                if not peakstart and le[i] > 0:
+                    wid = time[i] - time[dn]
+                    if wid > wid_noise / 2:
+                        peakstart = True
+                if peakstart and le[i] < 0:
+                    wid = time[i] - time[up]
+                    if wid > wid_noise / 2:
+                        peakend = True
+                if peakend and le[i] > 0:
+                    wid = time[i] - time[dn]
+                    if wid > wid_noise / 2:
+                        imax = np.argmax(data[start:dn]) + start
+                        tmax = time[imax]
+                        ymax = data[imax]
+                        iend = np.argmin(data[imax:dn]) + imax
+                        fit1 = False
+                        if fit1:
+                            param = resolve_fitting(time[start:iend],
+                                    data[start:iend], tmax, ymax)
+                            fit = resolve_fit(time, param, split=tmax)
+                            fit[:iend] = data[:iend]
+                            fit[fit > data] = data[fit > data]
+                        else:
+                            fall = (ymax - data[iend]) / 2
+                            ifit = imax
+                            for j in xrange(imax, iend):
+                                if ymax - fall > data[j]:
+                                    ifit = j
+                                    break
+                            param = resolve_fitting(time[ifit:iend],
+                                    data[ifit:iend], tmax, ymax, exp=True)
+                            fit = resolve_tail(time, param)
+                            fit[:iend] = data[:iend]
+                            fit[fit > data] = data[fit > data]
+                        fit *= neg
+                        newp = Peake()
+                        newp.time = np.array(p.time)
+                        newp.orig = np.array(p.orig)
+                        newp.base = np.array(base)
+                        base = base + fit
+                        newp.orig[iend:] = base[iend:]
+                        newp.calculate(p.time[start], p.time[iend])
+                        keep.append(newp)
+
+                        # pyplot.plot(p.time[iend:], base[iend:])
+                        start = iend
+                        break
+            if i >= n - 1:  # end
+                newp = Peake()
+                newp.time = np.array(p.time)
+                newp.orig = np.array(p.orig)
+                newp.base = np.array(base)
+                newp.calculate(p.time[start])
+                keep.append(newp)
+                start = n
     return keep
 
 def process_datafile(filename=FILE_TEST):
@@ -1134,22 +1195,31 @@ def process_datafile(filename=FILE_TEST):
 
         if sf.integrate is not None:
             peaks = sf.integrate
-            (area, sig) = sf.stats
+            (area, sig, width) = sf.stats
         else:
-            peaks, area, sig = reject_peaks(x, y, baseline, signal)
+            peaks, area, sig, width = reject_peaks(x, y, baseline, signal)
             sf.integrate = peaks
-            sf.stats = (area, sig)
+            sf.stats = (area, sig, width)
             sf.save()
 
-        for p in peaks:
-            pyplot.plot(p.time, p.orig, p.time, p.base)
+        # for p in peaks:
+        #    pyplot.plot(p.time, p.orig, p.time, p.base)
 
         if sf.peaks is not None:
             peaks = sf.peaks
         else:
-            peaks = resolve_peaks(peaks, area, sig)
+            peaks = resolve_peaks(peaks, area, sig, width)
             # sf.peaks = peaks
             sf.save()
+
+        # for p in peaks:
+        #    pyplot.plot(p.time, p.orig, p.time, p.base)
+
+        count = 0
+        for p in peaks:
+            print ("Peak {0}\t{1:0.3f}\t{2:0.3f}\t{3:0.3f}\t{4:0.1f}\t{5:0.1f}"
+                .format(count, p.retention, p.leading, p.tailing, p.area, p.height))
+            count += 1
 
         return peaks
 
@@ -1177,6 +1247,8 @@ class Savefile_v01():
             count = 0
             xs = []
             ac = []
+            lead = 0
+            tail = 0
             peak = None
             for line in infile:
                 splt = line.split("#")  # comment character
@@ -1214,8 +1286,8 @@ class Savefile_v01():
                         count = 0
                     else:
                         if count == 0:
-                            avg, avh = line.split(",")
-                            self.stats = (float(avg), float(avh))
+                            avg, avh, avw = line.split(",")
+                            self.stats = (float(avg), float(avh), float(avw))
                             temp = []
                         else:
                             val, num = line.split(":")
@@ -1246,13 +1318,15 @@ class Savefile_v01():
                             nums.append(float(s))
                         if val == "P":
                             peak = Peake()
+                            lead = nums[1]
+                            tail = nums[2]
                         elif val == "x":
                             peak.time = np.array(nums)
                         elif val == "y":
                             peak.orig = np.array(nums)
                         elif val == "b":
                             peak.base = np.array(nums)
-                            peak.calculate()
+                            peak.calculate(lead, tail)
                             temp.append(peak)
                             peak = None
                         count += 1
@@ -1278,7 +1352,8 @@ class Savefile_v01():
                 outfile.write("\n")
                 outfile.write(Savefile_v01.CHECK_1 + "\n")
             if self.integrate is not None:
-                outfile.write(str(self.stats[0]) + "," + str(self.stats[1]) + "\n")
+                outfile.write(str(self.stats[0]) + "," + str(self.stats[1]) + "," +
+                              str(self.stats[2]) + "\n")
                 for peak in self.integrate:
                     outfile.write("x:")
                     for i in xrange(len(peak.time)):
