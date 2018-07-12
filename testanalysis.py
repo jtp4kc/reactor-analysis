@@ -1072,10 +1072,13 @@ def resolve_tail(t, p):
     return a * np.exp(-b * t1) * t1
 
 def resolve_fitting(t, y, tmax, ymax, exp=False):
+
     def minfit(p):
         return resolve_fit(t, p, split=tmax) - y
+
     def mintail(p):
         return resolve_tail(t, p) - y
+
     p0 = [ymax, 1, 1]
     fitfun = minfit
     if exp:
@@ -1209,7 +1212,7 @@ def process_datafile(filename=FILE_TEST):
             peaks = sf.peaks
         else:
             peaks = resolve_peaks(peaks, area, sig, width)
-            # sf.peaks = peaks
+            sf.peaks = peaks
             sf.save()
 
         # for p in peaks:
@@ -1220,6 +1223,17 @@ def process_datafile(filename=FILE_TEST):
             print ("Peak {0}\t{1:0.3f}\t{2:0.3f}\t{3:0.3f}\t{4:0.1f}\t{5:0.1f}"
                 .format(count, p.retention, p.leading, p.tailing, p.area, p.height))
             count += 1
+
+        pyplot.plot(x, y, "b", x, baseline, "k")
+        for p in peaks:
+            ilead = -1
+            itail = -1
+            for i in xrange(len(p.time)):
+                if ilead < 0 and p.time[i] >= p.leading:
+                    ilead = i
+                if itail < 0 and p.time[i] >= p.tailing:
+                    itail = i
+            pyplot.plot(p.time[ilead:itail], p.base[ilead:itail], "r")
 
         return peaks
 
@@ -1316,7 +1330,7 @@ class Savefile_v01():
                         nums = []
                         for s in num.split(","):
                             nums.append(float(s))
-                        if val == "P":
+                        if val.startswith("P"):
                             peak = Peake()
                             lead = nums[1]
                             tail = nums[2]
@@ -1382,20 +1396,20 @@ class Savefile_v01():
                                   str(p.area) + "," +
                                   str(p.height) + "\n")
                     outfile.write("x:")
-                    for i in xrange(len(peak.time)):
+                    for i in xrange(len(p.time)):
                         if i > 0:
                             outfile.write(",")
-                        outfile.write(str(peak.time[i]))
+                        outfile.write(str(p.time[i]))
                     outfile.write("\ny:")
-                    for i in xrange(len(peak.orig)):
+                    for i in xrange(len(p.orig)):
                         if i > 0:
                             outfile.write(",")
-                        outfile.write(str(peak.orig[i]))
+                        outfile.write(str(p.orig[i]))
                     outfile.write("\nb:")
-                    for i in xrange(len(peak.base)):
+                    for i in xrange(len(p.base)):
                         if i > 0:
                             outfile.write(",")
-                        outfile.write(str(peak.base[i]))
+                        outfile.write(str(p.base[i]))
                     outfile.write("\n")
                     count += 1
                 outfile.write(Savefile_v01.CHECK_3 + "\n")
