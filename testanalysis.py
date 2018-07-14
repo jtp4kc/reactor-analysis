@@ -653,6 +653,7 @@ class Peake():
         self.height = 0
         self.width = 0
         self.negative = False
+        self.clips = False
 
     def calculate(self, leading=None, tailing=None):
         self.data = self.orig - self.base
@@ -672,6 +673,23 @@ class Peake():
             self.height = -np.min(self.data)
             self.retention = self.time[np.argmin(self.data)]
         self.area = 60 * trapz(self.time, self.data) * neg
+        self.clips = False
+        startpeak = False
+        endpeak = False
+        for i in xrange(len(self.time)):
+            t = self.time[i]
+            d = neg * self.data[i]
+            if t < self.leading:
+                continue
+            if not startpeak and d > 0:
+                startpeak = True
+            if startpeak and not endpeak and d <= 0:
+                endpeak = True
+            if endpeak and d > 0:
+                self.clips = True
+                break
+            if t > self.tailing:
+                break
 
     def try_split(self):
         self.fit_peak()
@@ -1091,6 +1109,9 @@ def resolve_fitting(t, y, tmax, ymax, exp=False):
 
 def resolve_peaks(peaks, area_noise, sig_noise, wid_noise):
     keep = []
+    # print "Area cutoff:", area_noise
+    # print "Height cutoff:", sig_noise
+    # print "Width cutoff:", wid_noise
     for p in peaks:
         time = p.time - p.time[0]
         orig = np.array(p.orig)
@@ -1099,6 +1120,7 @@ def resolve_peaks(peaks, area_noise, sig_noise, wid_noise):
         if p.negative:
             neg = -1
 
+        temp = []
         n = len(time)
         start = 0
         while start < n:
@@ -1155,7 +1177,7 @@ def resolve_peaks(peaks, area_noise, sig_noise, wid_noise):
                         base = base + fit
                         newp.orig[iend:] = base[iend:]
                         newp.calculate(p.time[start], p.time[iend])
-                        keep.append(newp)
+                        temp.insert(0, newp)
 
                         # pyplot.plot(p.time[iend:], base[iend:])
                         start = iend
@@ -1166,20 +1188,66 @@ def resolve_peaks(peaks, area_noise, sig_noise, wid_noise):
                 newp.orig = np.array(p.orig)
                 newp.base = np.array(base)
                 newp.calculate(p.time[start])
-                keep.append(newp)
+                temp.insert(0, newp)
                 start = n
+
+        n = len(temp)
+        temp2 = []
+        for i in xrange(n):  # collapse small peaks
+            t = temp[i]
+            if t.area > area_noise and t.height > sig_noise:
+                temp2.insert(0, t)
+                # print "Keeping", t.retention, "A:", t.area, "H:", t.height
+            elif i >= n - 1:  # end of list
+                if i > 0:
+                    o = temp[i - 1]
+                    o.base = t.base
+                    o.calculate(t.leading, o.tailing)
+                    # print "MergingR", t.retention, "A:", t.area, "H:", t.height
+                else:
+                    temp2.insert(0, t)
+                    # print "Keeping", t.retention, "A:", t.area, "H:", t.height
+            else:  # add this peak to the next one back
+                o = temp[i + 1]
+                o.orig = t.orig
+                o.calculate(o.leading, t.tailing)
+                # print "MergingL", t.retention, "A:", t.area, "H:", t.height
+        for t in temp2:  # sort by retention time
+            ind = 0
+            for i in xrange(len(keep)):
+                if t.retention > keep[i].retention:
+                    ind = i + 1
+            keep.insert(ind, t)
     return keep
 
-def process_datafile(filename=FILE_TEST):
+# TODO List:
+# Try fitting the baseline with the missing values replaced by 0's in the residual,
+#     so that linear filling is not needed.
+# Move this code to the other file.
+# Make it work for both with chromatogram or without (use the existing peak list)
+# Plot the baseline and peaks for each file in one document, and record a zoom in
+#     of each peak in another, that shows better detail of the as-fit and adjusted
+#     signals after integration is complete
+# Test this code against a whole reaction run, compare with Shimadzu integration
+# Parse the peak list across all files to determine where components are, and filter
+#     the minor peaks by which major peak they belong to (EtOH)
+# Connect different runs together, to establish the non-reaction datapoints, so that
+#     a mass balance can be automatically calculated
+# Re-analyze everything! Will need to go through and update background conversions.
+
+def process_datafile(filename=FILE_TEST, ifprint=False):
     importfile = import_shimadzu_data(filename)
     if len(importfile.chromatogram) > 0:
         data = np.array(importfile.chromatogram)
         x = data[:, 0]
         y = data[:, 1]
 
-        sf = Savefile_v01()
-        if os.path.exists(FILE_SAVE) and os.path.isfile(FILE_SAVE):
-            sf.read(FILE_SAVE)
+        fname = filename
+        if filename.endswith(".txt"):
+            fname = filename.rsplit(".txt", 1)[0]
+        sf = Savefile_v01(fname)
+        if os.path.exists(sf.filename) and os.path.isfile(sf.filename):
+            sf.read()
 
         if sf.baseline is not None:
             curve = sf.baseline
@@ -1218,22 +1286,27 @@ def process_datafile(filename=FILE_TEST):
         # for p in peaks:
         #    pyplot.plot(p.time, p.orig, p.time, p.base)
 
-        count = 0
-        for p in peaks:
-            print ("Peak {0}\t{1:0.3f}\t{2:0.3f}\t{3:0.3f}\t{4:0.1f}\t{5:0.1f}"
-                .format(count, p.retention, p.leading, p.tailing, p.area, p.height))
-            count += 1
+        if ifprint:
+            count = 0
+            for p in peaks:
+                print ("Peak {0}\t{1:0.3f}\t{2:0.3f}\t{3:0.3f}\t{4:0.1f}" +
+                       "\t{5:0.1f}").format(count, p.retention, p.leading,
+                                            p.tailing, p.area, p.height)
+                count += 1
 
-        pyplot.plot(x, y, "b", x, baseline, "k")
+        pyplot.plot(x, y, "b", x, baseline, "y")
         for p in peaks:
             ilead = -1
             itail = -1
             for i in xrange(len(p.time)):
-                if ilead < 0 and p.time[i] >= p.leading:
+                if p.time[i] < p.leading:
                     ilead = i
                 if itail < 0 and p.time[i] >= p.tailing:
                     itail = i
+            if ilead < 0:
+                ilead = 0
             pyplot.plot(p.time[ilead:itail], p.base[ilead:itail], "r")
+            pyplot.axis([0, 94, -5000, 10000])
 
         return peaks
 
@@ -1242,13 +1315,16 @@ class Savefile_v01():
     CHECK_2 = "CHECK-INTEGRATE COMPLETE"
     CHECK_3 = "CHECK-PEAK LIST COMPLETE"
 
-    def __init__(self):
+    def __init__(self, basefile):
         self.baseline = None
         self.integrate = None
         self.stats = None
         self.peaks = None
+        fname = os.path.basename(basefile)
+        self.filename = "_" + fname + FILE_SAVE
 
-    def read(self, filename):
+    def read(self):
+        filename = self.filename
         if not filename.endswith(".sav"):
             raise ValueError("Incorrect file format (Requires .sav): " + filename)
         if not filename.endswith("_v01.sav"):
@@ -1347,10 +1423,15 @@ class Savefile_v01():
             infile.close()
 
     def save(self):
-        if os.path.exists(FILE_SAVE):
-            os.remove(FILE_SAVE)
+        filename = self.filename
+        if os.path.exists(filename):
+            os.remove(filename)
+        if not self.filename.endswith(".sav"):
+            raise ValueError("Incorrect file format (Saves as .sav): " + filename)
+        if not self.filename.endswith("_v01.sav"):
+            raise ValueError("Incorrect version (Saves as v01): " + filename)
 
-        with open(FILE_SAVE, "w") as outfile:
+        with open(filename, "w") as outfile:
             if self.baseline is not None:
                 outfile.write("y0:" + str(self.baseline.y0) + "\n")
                 outfile.write("d0:" + str(self.baseline.d0) + "\n")
