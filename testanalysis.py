@@ -964,30 +964,35 @@ def estimate_baseline(x, y, window=101, slope=1000, tol=1000, npts=25):
     buildx = []
     buildy = []
     last = 0
+    nully = np.zeros_like(y) * np.NaN
     for i in ind:
         buildx.append(x[last:i[0]])
         buildy.append(ma[last:i[0]])
+        nully[last:i[0]] = ma[last:i[0]]
         last = i[1]
     xs = np.concatenate(buildx)
     ys = np.concatenate(buildy)
+    mask = np.isnan(nully)
 
     curve = Spline()
     curve.accel = np.zeros((2, npts), np.float64)
-    spacing = np.linspace(0, xs[-1], npts)
+    spacing = np.linspace(0, x[-1], npts)
     for i in range(npts):
         curve.accel[0, i] = spacing[i]
 
-    def unpack_curve(mx, *p):
+    def unpack_curve(p):
         curve.y0 = p[0]
         curve.d0 = p[1]
         for i in range(npts):
             curve.accel[1, i] = p[i + 2]
-        return curve.generate(mx)
+        ret = y - curve.generate(x)
+        ret[mask] = 0
+        return ret
 
     p0 = np.array([ma[0], 0] + [0] * npts)
-    param, _ = optim.curve_fit(unpack_curve, xs, ys, p0)
-    unpack_curve(xs, *param)
-    return curve, xs
+    param = optim.leastsq(unpack_curve, p0)
+    unpack_curve(param[0])
+    return curve  # , xs
 
 def reject_peaks(x, y, baseline, signal, reltol=0.04):
     negsig = signal * -1.0
@@ -1253,13 +1258,13 @@ def process_datafile(filename=FILE_TEST, ifprint=False):
             curve = sf.baseline
             xs = curve.xs
         else:
-            curve, xs = estimate_baseline(x, y)
-            curve.xs = xs
+            curve = estimate_baseline(x, y)
+            curve.xs = x
             sf.baseline = curve
             sf.save()
 
-        vals = curve.generate(xs)
-        baseline = linear_interpolate(x, xs, vals)
+        baseline = curve.generate(x)
+        # baseline = linear_interpolate(x, xs, vals)
         signal = y - baseline
 
         # pyplot.plot(x, y, x, baseline)
