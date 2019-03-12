@@ -1,0 +1,82 @@
+Reaction Conditions v2
+
+info
+	catalyst=Ca3(PO4)2
+	catdate =20181001
+	agilent =	#filename
+	shimadzu=	#filename
+	output  =Results
+components
+	nitrogen	0.0	inert
+	ethanol		26.5 reactant
+	methane 	7.9 standard
+flow
+	start=10-19-2018 10:34am
+	stop =10-19-2018 11:12pm
+	temp =360	#Celsius
+	pres =1.2	#psig
+	equil=3
+	
+	nitrogen	vol=33.40
+	ethanol	vol=0.006	density=0.789
+	methane	vol=5.00	~after
+flow
+
+
+
+Reaction Conditions v2
+
+focus
+	ethene
+	ethane
+	acetaldehyde
+	butadiene
+	diethyl ether
+	butanaldehyde
+	crotonaldehyde
+	crotyl/butanol
+	hexanol
+reference
+	nitrogen 		mw=28.01 	nc=0 	rf=0.00
+	methane 		mw=16.04 	nc=1 	rf=0.97	agilent_rf=1.00 
+	ethene 			mw=28.05 	nc=2 	rf=1.02	agilent_rf=1.00
+	ethane 			mw=30.07 	nc=2 	rf=0.97	
+	methanol 		mw=32.0419 	nc=1 	rf=0.23	
+	acetaldehyde 	mw=44.05256	nc=2 	rf=0.30	
+	1-butene 		mw=56.11	nc=4 	rf=1.08	 
+	butadiene 		mw=54.0916	nc=4 	rf=1.09	agilent_rf=1.00
+	butane 			mw=58.12	nc=4 	rf=1.09	
+	trans-2-butene 	mw=56.11	nc=4 	rf=1.08	agilent_rf=1.00
+	cis-2-butene 	mw=56.11	nc=4 	rf=1.08	agilent_rf=1.00
+	ethanol 		mw=46.06844	nc=2 	rf=0.58	agilent_rf=0.46	vle=0.0000017 -0.0000136 0.0058547 0.0813075 1.6758119 #kPa-degC
+	diethyl ether 	mw=74.1188	nc=4 	rf=0.57	agilent_rf=0.50
+	butanaldehyde 	mw=72.12	nc=4 	rf=0.56	agilent_rf=0.38
+	crotonaldehyde 	mw=70.09	nc=4 	rf=0.60	agilent_rf=0.55
+	unknownA	 	mw=70		nc=4 	rf=1	
+	crotyl/butanol 	mw=74.122	nc=4 	rf=0.58	agilent_rf=0.64
+	unknownB	 	mw=70		nc=4 	rf=1	
+	octane 			mw=114.23	nc=8 	rf=0.97	
+	hexanol 		mw=102.20	nc=6 	rf=0.50	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+
