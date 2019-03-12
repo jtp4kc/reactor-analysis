@@ -16,7 +16,10 @@ import scipy.interpolate as interp
 import matplotlib.pyplot as pyplot
 
 FILE_SAVE = "_integrate_v01.sav"
-FILE_TEST = "../Sandbox/batch_data043.txt"
+FILE_TEST1 = "../Sandbox/batch_data043.txt"
+FILE_TEST2 = "batch_data000.txt"
+FILE_TEST3 = "batch_data013.txt"
+file_test = FILE_TEST1
 
 class obj(object):
     pass
@@ -1240,7 +1243,7 @@ def resolve_peaks(peaks, area_noise, sig_noise, wid_noise):
 #     a mass balance can be automatically calculated
 # Re-analyze everything! Will need to go through and update background conversions.
 
-def process_datafile(filename=FILE_TEST, ifprint=False):
+def process_datafile(filename=file_test, ifprint=False):
     importfile = import_shimadzu_data(filename)
     if len(importfile.chromatogram) > 0:
         data = np.array(importfile.chromatogram)
@@ -1643,6 +1646,82 @@ def fit(x, *p):
     vals = scale * np.exp(-m1 * t1 ** 2) * np.exp(-m2 * t2)
     return vals
 
+def grab(filename=file_test, ifprint=False):
+    importfile = import_shimadzu_data(filename)
+    if len(importfile.chromatogram) > 0:
+        data = np.array(importfile.chromatogram)
+        x = data[:, 0]
+        y = data[:, 1]
+
+        return x, y
+
+def expm(x, y, w=101, s=1000):
+    n = len(x)
+    d = derivative(x, y)
+    a = np.zeros_like(y)
+    for i in xrange(0, n - w):
+        a[i] = np.mean(d[i:i + w])
+    dd = derivative(x, a)
+    aa = np.zeros_like(y)
+    for i in xrange(0, n - w):
+        aa[i] = np.mean(dd[i:i + w])
+    points = []
+    s = 0
+    updn = aa[0] > 0
+    for i in xrange(1, len(aa)):
+        if updn:
+            if aa[i] < 0:
+                updn = False
+                points.append(np.argmax(aa[s:i]) + s)
+                s = i
+        else:
+            if aa[i] > 0:
+                updn = True
+                points.append(np.argmin(aa[s:i]) + s)
+                s = i
+    if s < i:
+        if updn:
+            points.append(np.argmax(aa[s:i]) + s)
+        else:
+            points.append(np.argmin(aa[s:i]) + s)
+
+    pp = []
+    l = 0
+    for i in points:
+        if i == l:
+            continue
+        up = np.argmax(y[l:i]) + l
+        dn = np.argmin(y[l:i]) + l
+        if up != l and up < i - 1:
+            if dn == l or dn >= i - 1:
+                pp.append(up)
+        elif dn != l and dn < i - 1:
+            if up == l or up >= i - 1:
+                pp.append(dn)
+        l = i
+
+    key = np.array([0] + pp)
+    slopes = derivative(x[key], y[key])
+
+    return a, aa, key, slopes
+
 if __name__ == '__main__':
     pass
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
