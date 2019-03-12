@@ -17,6 +17,25 @@ P = 101.325  # kPa, ambient
 Ts = 273.15  # K, standard
 Ps = 101.325  # kPa, standard
 
+class _SetupInfo():
+
+    def __init__(self):
+        self.header = []
+        self.attributes = {}
+        self.contents = []
+
+class ReferenceInfo(_SetupInfo):
+    pass
+
+class ReactionInfo(_SetupInfo):
+    pass
+
+class Component():
+    pass
+
+class Conditions():
+    pass
+
 class _SetupReader():
 
     def _load(self, filename):
@@ -56,14 +75,19 @@ class _SetupReader():
 
     def _checkhold(self, line):  # should multiline?
         return False
+
     def _assign(self, line):  # variable = value
         pass
+
     def _set(self, segs):  # set .....
         pass
+
     def _make(self, segs):  # new .....
         pass
+
     def _multiline(self, lines):  # handle block
         pass
+
     def _handleline(self, line):  # for anything else
         pass
 
@@ -656,15 +680,4 @@ class Flow():
 if __name__ == '__main__':
     os.chdir(TEST_FOLDER)
     Reaction().load(TEST_FILE)
-
-
-
-
-
-
-
-
-
-
-
 
